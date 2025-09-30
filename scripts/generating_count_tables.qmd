@@ -1,0 +1,180 @@
+
+
+---
+title: "generating raw counts for: Dissecting the mechanisms of syncytiotrophoblast regeneration using apical-out human placental organoids"
+author: "Hans-Rudolf Hotz"
+date: 2025-09-19
+date-format: iso
+format: 
+    html:
+        embed-resources: true
+        toc: true
+        toc-depth: 6
+---
+
+# 0) preparations
+
+
+## initialize R
+
+```{r message=FALSE}
+#| label: initialize
+library(QuasR)
+library(TxDb.Hsapiens.GENCODE.GRCh38.gencode38)
+library(org.Hs.eg.db)
+```
+
+## setup directories
+
+```{r}
+#| label: directories
+date()
+today<- format(Sys.Date(), format="%Y%m%d")
+
+#plots directory
+results_directory <- paste("counts.",today,"/", sep = "")
+dir.create(file.path(getwd(), results_directory))
+```
+
+# 1) running QuasR
+
+## alignment
+
+```{r}
+genome <- "genome/GRCh38.primary_assembly.genome.fa"
+alignmentsDir <- "bam/"
+
+# we use 24 cores
+cl <- makePSOCKcluster(24)
+```
+
+```{r}
+qProject_3574 <- qAlign("3574.qsamples",
+                        genome = genome,
+                        aligner = "Rhisat2",
+                        maxHits = 1,
+                        splicedAlignment = TRUE,
+                        #checkOnly = TRUE,
+                        alignmentsDir = alignmentsDir,
+                        clObj = cl)
+```
+
+```{r}
+qProject_3797and3683 <- qAlign("3797and3683.qsamples",
+                        genome = genome,
+                        aligner = "Rhisat2",
+                        maxHits = 1,
+                        splicedAlignment = TRUE,
+                        #checkOnly = TRUE,
+                        alignmentsDir = alignmentsDir,
+                        clObj = cl)
+```
+
+
+## qCount (orientation = "opposite" and useRead = "first" - it is stranded)
+
+```{r}
+counts_3574 <- qCount(qProject_3574, TxDb.Hsapiens.GENCODE.GRCh38.gencode38,
+       reportLevel = "gene",
+       orientation = "opposite",
+       useRead = "first",
+       includeSpliced = TRUE,
+       clObj = cl )
+
+head(counts_3574)
+```
+
+```{r}
+counts_3797and3683 <- qCount(qProject_3797and3683, TxDb.Hsapiens.GENCODE.GRCh38.gencode38,
+       reportLevel = "gene",
+       orientation = "opposite",
+       useRead = "first",
+       includeSpliced = TRUE,
+       collapseBySample = FALSE,
+       clObj = cl )
+
+head(counts_3797and3683)
+```
+
+
+# 2) add annotation and write to file
+
+## gene symbols (same code as used in local Galaxy)
+
+```{r}
+ids <- row.names(counts_3574)
+ids <- unlist(strsplit(ids, '[.]'))[c(TRUE, FALSE)]	
+head(ids)
+rownames(counts_3574) <- ids
+rownames(counts_3797and3683) <- ids
+
+annot <- select(org.Hs.eg.db, ids, columns=c("SYMBOL","GENENAME"), keytype="ENSEMBL")
+head(annot)			
+
+# now we have to aggregate the manytomany
+annot1 <- annot[-3]
+annot2 <- annot[-2]
+
+annot1.ag <- aggregate(annot1[2],annot1[-2],FUN = function(X) paste(unique(X), collapse=", "))
+annot2.ag <- aggregate(annot2[2],annot2[-2],FUN = function(X) paste(unique(X), collapse=", "))
+	
+# and merge back 
+annot <- merge(annot1.ag,annot2.ag)
+				
+counts.final_annot_3574 <- merge(annot,counts_3574,by.x="ENSEMBL",by.y=0)
+colnames(counts.final_annot_3574)[1] <- "ENSEMBLID"
+
+counts.final_annot_3797and3683 <- merge(annot,counts_3797and3683,by.x="ENSEMBL",by.y=0)
+colnames(counts.final_annot_3574)[1] <- "ENSEMBLID"
+```
+
+## uniquifyFeatureNames
+
+```{r}
+# based on Aron Lun's code:
+uniquifyFeatureNames <- function(ID, names) {
+    if (length(ID)!=length(names)) {
+        stop("lengths of 'ID' and 'names' must be equal")
+    }
+    names <- as.character(names)
+    ID <- as.character(ID)
+    missing.name <- is.na(names)
+    names[missing.name] <- ID[missing.name]
+    dup.name <- names %in% names[duplicated(names)]
+    names[dup.name] <- paste0(names[dup.name], "_", ID[dup.name])
+    return(names)
+}
+
+# generate the new table (which will have a new, additional "ID" column)
+unique <- as.vector(counts.final_annot_3574$ENSEMBLID)
+target <- as.vector(counts.final_annot_3574$SYMBOL)
+
+new_ID <- uniquifyFeatureNames(unique, target) 
+
+all_counts_uID_3574 = cbind(new_ID,counts.final_annot_3574)
+colnames(all_counts_uID_3574)[1] <- c("uniqueID") 
+rownames(all_counts_uID_3574) <- all_counts_uID_3574$uniqueID
+
+all_counts_uID_3797and3683 = cbind(new_ID,counts.final_annot_3797and3683)
+colnames(all_counts_uID_3797and3683)[1] <- c("uniqueID") 
+rownames(all_counts_uID_3797and3683) <- all_counts_uID_3797and3683$uniqueID
+```
+
+## write to table
+
+```{r}
+file_name_raw <- paste(results_directory,"3574F_raw_counts.uniqueID.",today,".tab",sep = "")
+write.table(all_counts_uID_3574, file_name_raw,
+            quote = FALSE, row.names = FALSE, col.names = TRUE, sep="\t")
+
+file_name_raw <- paste(results_directory,"3797Fand3683F_raw_counts.uniqueID.",today,".tab",sep = "")
+write.table(all_counts_uID_3797and3683, file_name_raw,
+            quote = FALSE, row.names = FALSE, col.names = TRUE, sep="\t")
+```
+
+
+## 2) sessionInfo
+
+```{r}
+sessionInfo()
+```
