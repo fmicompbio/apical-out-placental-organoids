@@ -1,0 +1,419 @@
+---
+title: "Bulk 1 - apical-out-placental-organoids "
+author: "Giada Guntri"
+date: 2025-09-30
+date-format: iso
+format: 
+    html:
+        embed-resources: true
+        toc: true
+        toc-depth: 6
+---
+
+# Description
+
+This script will generate the following plots and tables:
+
+\- Fig 2 b, d
+
+\- Supp Fig 1 d
+
+\- Supp Dat for Fig 2 b
+
+# Preparations
+
+## load libraries
+
+```{r message=FALSE}
+#| label: libraries
+library(edgeR) 
+library(PCAtools)
+library(sva)
+library(ComplexHeatmap)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+```
+
+## new folders
+
+```{r}
+#| label: folders
+plot_dir <- "Paper_Figures"
+if (!file.exists(plot_dir)) {
+    dir.create(plot_dir, showWarnings = FALSE, recursive = FALSE)
+}
+
+table_dir <- "Paper_Tables"
+if (!file.exists(table_dir)) {
+    dir.create(table_dir, showWarnings = FALSE, recursive = FALSE)
+}
+```
+
+## loading all the data
+
+```{r}
+#| label: data
+all_counts_orig <- read.delim("3574F_raw_counts.uniqueID.20250919.tab")
+
+rownames(all_counts_orig) <- all_counts_orig$uniqueID
+
+all_counts_selected <- all_counts_orig[,c(1:12,15:21,24:30)]
+
+colnames(all_counts_orig)
+```
+
+## set up metadata
+
+```{r}
+#| label: metadata
+# Get only the sample columns
+sample_cols <- colnames(all_counts_selected)[6:ncol(all_counts_selected)]
+
+# Donor to sex mapping
+donor_sex <- c(
+  "X113" = "female",
+  "Y031" = "female",
+  "X087" = "male"
+)
+
+# Create metadata
+metadata <- data.frame(
+  donor = sub("_.*", "", sample_cols),
+  number = seq(133, by=1, length.out = length(sample_cols)),  # adjust start number if needed
+  time = as.numeric(sub(".*_(\\d+)d_.*", "\\1", sample_cols)),
+  media = sub(".*_(MG|SP)$", "\\1", sample_cols),
+  oxygen = "21p",
+  mf = donor_sex[sub("_.*", "", sample_cols)],
+  sample = paste0("X", seq(1, length(sample_cols)))
+)
+
+# Set rownames as the sample column names
+rownames(metadata) <- sample_cols
+
+# Add the time.char column as a character type
+metadata <- data.frame(metadata,
+                       time.char = as.character(metadata$time))
+#make a factor for metadata_all$time.char
+metadata$time.char <- factor(metadata$time.char, levels = c("1", "2", "3", "5","6","7","8"))
+
+metadata <- data.frame(metadata,
+                       time.med = paste(metadata$media, metadata$time))
+
+# Make a factor for metadata$time.char with specific levels
+metadata$time.med <- factor(metadata$time.med, levels = c("MG 5", "MG 6", "MG 7", "MG 8","SP 1", "SP 2", "SP 3", "SP 5"))
+
+# View metadata
+metadata
+```
+
+# DGE: MG versus SP at individual (time) points
+
+## prepare the metadata
+
+```{r}
+donor = metadata$donor
+media = metadata$media
+time = metadata$time
+```
+
+## generate DGEList object
+
+We work with the raw counts
+
+```{r}
+#| label: DGE
+all_counts_selected.asDGEList <- DGEList(counts=all_counts_selected[,-c(1:5)],genes=all_counts_selected[,1:5]  )
+```
+
+### filter lowly expressed genes
+
+We have 3 replicas (aka donors)
+
+```{r}
+#| label: filtering
+mincpm <- 1 
+minsamples <- 3  
+
+all_counts_selected.asDGEList.cpm <- cpm(all_counts_selected.asDGEList, log = FALSE)
+
+all_counts_selected.asDGEList <- all_counts_selected.asDGEList[rowSums(all_counts_selected.asDGEList.cpm > mincpm) >= minsamples, , keep.lib.size=FALSE] 
+```
+
+### normalization
+
+```{r}
+#| label: normalization
+all_counts_selected.asDGEList <- calcNormFactors(all_counts_selected.asDGEList)   # same as normLibSizes(y) 
+head(all_counts_selected.asDGEList$samples) 
+plotMDS(all_counts_selected.asDGEList)
+```
+
+## setting up the design matrix
+
+day 5
+
+```{r}
+MG.21p.5 <- media== "MG" & time == "5"
+```
+
+day 6
+
+```{r}
+MG.21p.6 <- media== "MG" & time == "6"
+SP.21p.1 <- media== "SP" & time == "1"
+```
+
+day 7
+
+```{r}
+MG.21p.7 <- media== "MG" & time == "7"
+SP.21p.2 <- media== "SP" & time == "2"
+```
+
+day 8
+
+```{r}
+MG.21p.8 <- media== "MG" & time == "8"
+SP.21p.3 <- media== "SP" & time == "3"
+```
+
+use model.matrix (do not include MG.21p.5)
+
+```{r}
+#| label: design
+design <- model.matrix(~donor+MG.21p.6+ SP.21p.1+
+                              MG.21p.7+ SP.21p.2+
+                              MG.21p.8+ SP.21p.3)
+
+rownames(design) <- colnames(all_counts_selected.asDGEList)
+design
+```
+
+## dispersion estimation and fitting
+
+```{r}
+#| label: dispersion
+all_counts_selected.asDGEList.disp <- estimateDisp(all_counts_selected.asDGEList, design, robust = TRUE)
+all_counts_selected.asDGEList.disp$common.dispersion
+
+plotBCV(all_counts_selected.asDGEList.disp)
+```
+
+```{r}
+#| label: fitting
+fit <- glmQLFit(all_counts_selected.asDGEList.disp, design)
+
+plotQLDisp(fit)
+```
+
+## Differential expression: Day 8 MG versus Day 8(3) SP
+
+```{r}
+#| label:  differential expression
+(colnames(design) == "MG.21p.8TRUE") * 1  + (colnames(design) == "SP.21p.3TRUE") * -1
+
+qlf <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "MG.21p.8TRUE") * 1  + (colnames(design) == "SP.21p.3TRUE") * -1) )
+
+summary(decideTests(qlf))
+
+plotMD(qlf)
+abline(h=c(-1, 1), col="blue")
+
+topTags(qlf)
+```
+
+### define up and down regulated genes
+
+```{r}
+#| label: Supp Dat for Fig 2 b
+tt <- as.data.frame(topTags(qlf, n = nrow(all_counts_selected.asDGEList)))
+
+# modify the status column based on logFC and FDR
+tt_modified <- tt %>%
+  mutate(status = factor(case_when(
+    logFC > 1 & FDR < 0.05 ~ "up",
+    logFC < (-1) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+
+write.csv(tt_modified, file = paste0(table_dir, "/Table 1.csv"), row.names = FALSE)
+
+# filter the data to exclude 'ns' status
+tt_filtered <- tt_modified %>% filter(status != "ns")
+
+# save the filtered data to a tab-del file
+file_name.table  <- paste(table_dir,"/Figure_2_b.DEGFiltered.tab",sep = "")
+write.table(tt_filtered, file_name.table,
+            quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+### volcano plot
+
+```{r}
+#| label: Fig 2 d
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("MG vs SP; abs(logFC) > 1, logCPM > 1, PValue < 0.05") +
+  theme(plot.title = element_text(size = 25, face = "bold.italic"),
+        axis.title = element_text(size = 22, face = "bold"),
+        axis.text = element_text(size = 18)) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.00039185), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -1, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified %>% filter(SYMBOL %in% c("CCL5", "IL31RA","MISP3","HSPB1","CXCL10","UCP2","CYP1A1","CYP1A2","OASL","EVA1B", "FCGR3B, LOC124905743", "MMP2", "HIPK2", "CCDC88A", "SFMBT2", "SEMA6D", "MMP12", "CHRM3", "AOC1", size = 7)), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+
+# display (and save) the plot
+print(vplot)
+
+
+tiff(paste0(plot_dir, "/Figure_2_d.tiff"), width = 9, height = 7, units = "in", res = 300)
+    print(vplot)
+dev.off()
+```
+
+# PCA
+
+## Batch correction by donor using ComBat-seq
+
+```{r message=FALSE, warning=FALSE}
+#| label: batch correction
+all_counts_selected.CBSeq_byD <- ComBat_seq(as.matrix(all_counts_selected[,-c(1:5)]), batch=metadata$donor, group=NULL)
+row.names(all_counts_selected.CBSeq_byD) <- row.names(all_counts_selected)
+```
+
+## PCA
+
+PCA of batch corrected samples of a timecourse of apical-in vs apical-out analysed by bulk RNA sequencing, coloured by time and apical conformation (n=3 independent organoid lines).
+
+```{r}
+#| label: Fig 2 b
+custom_colors <- c("MG 5" = '#C4DEE6', "MG 6" = '#5FC5E4', "MG 7" = '#1E90FF', "MG 8" = '#00008F', "SP 1" = '#FF2F98', "SP 2" = '#FF9200',  "SP 3" = '#018E00')
+
+all_counts_selected.bc.cpm.pca <- pca(cpm(all_counts_selected.CBSeq_byD, log=TRUE), 
+                              metadata = metadata, removeVar = 0.1)
+
+
+# Create the biplot with custom colors
+PCA <- biplot(all_counts_selected.bc.cpm.pca, 
+       colby = "time.med",
+       legendPosition = 'right',
+       title = "PCA",
+       encircle = FALSE, 
+       lab = NULL,
+       pointSize = 7.5,
+       colkey = custom_colors)
+
+#Remove the unnecessary fill label
+PCA <- PCA + labs(fill = NULL)
+# display (and save) the plot
+PCA
+
+tiff(paste0(plot_dir, "/Figure_2_b.tiff"), width = 9, height = 7, units = "in", res = 300)
+print(PCA)
+dev.off()
+```
+
+# Heatmap
+
+Heatmap depicting batch corrected centered and scaled counts per million (cpm) of selected genes across the apical-in and apical-out time course
+
+## defining genes
+
+```{r}
+#| label: defining genes
+CTB <- c("CDH1", "EPCAM", "PCNA", "MKI67", "CCNA2", "TP63", "ITGA6")
+
+VCTfusing <- c("OVOL1", "ENDOU", "GCM1", "SLC1A5", "MFSD2A", "LGR5", "TNIK", "WLS", "BMP7")
+
+STB <- c("CGA", "CGB3", "CYP19A1", "ERVW-1", "SDC1", "PSG3", "PSG6", "ERVV-1", "ERVV-2", "ERVFRD-1", "ERV3-1", "EPS8L1", "CSH1, CSHL1","PAPPA2", "KISS1")
+
+genes1.1 <- c(CTB,VCTfusing, STB)
+genes1.1
+```
+
+## data to plot
+
+### calculate cpm values
+
+```{r}
+all_counts_selected.bc.cpm <- cpm(all_counts_selected.CBSeq_byD, log=FALSE)
+```
+
+## assemble data in custom order
+
+```{r}
+data2plot1bc <- data.frame()
+
+for (gene in genes1.1) {
+    data2plot1bc <- rbind(data2plot1bc, all_counts_selected.bc.cpm[rownames(all_counts_selected.bc.cpm) == gene,])
+}
+
+
+rownames(data2plot1bc) <- genes1.1
+
+colnames(data2plot1bc) <- colnames(all_counts_selected.bc.cpm)
+
+data2plot1bc.sc <- t(scale(t(data2plot1bc)))
+
+custom_order <- c(
+  grep("X113_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_3d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_3d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_3d_SP", colnames(data2plot1bc.sc), value = TRUE)
+)
+
+data2plot1bc.sc <- data2plot1bc.sc[, custom_order]
+```
+
+## and plot
+
+```{r}
+#| label: Supp Fig 1 d
+plot <- Heatmap(data2plot1bc.sc, cluster_columns=FALSE, cluster_rows=FALSE, 
+                   heatmap_legend_param = list(title = "cpm (c/s)", color_bar = "continuous"),
+                   column_title = "TO identity",
+                   bottom_annotation = NULL)
+
+# display (and save) the plot
+plot
+
+tiff(paste0(plot_dir, "/SuppFigure_1_d.tiff"), width = 9, height = 7, units = "in", res = 300)
+    print(plot)
+dev.off()
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
