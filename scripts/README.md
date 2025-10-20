@@ -12,4 +12,4 @@ This script will generate the following plots and tables: - Fig 2 b, d; - Supp F
 
 # 3) Bulk 2 - apical-out-placental-organoids.qmd 
 
-This script will generate the following plots and tables: - Fig 4 a, b, c, d, e, h; - Fig 5 a;- Supp Fig 3 a, b, c, d; - Supp Fig 4 a, b; - Supp Fig 5 a, b; - Supp Dat for Fig 4 c, d, e and Supp Fig 3 a, b, c, d.
+This script will generate the following plots and tables: - Fig 4 a, b, c, d, e, f; g;- Supp Fig 3 a, b, c, d; - Supp Fig 4 a, b; - Supp Fig 5 b, c; - Supp Dat for Fig 4 c, d, e and Supp Fig 3 a, b, c, d.
