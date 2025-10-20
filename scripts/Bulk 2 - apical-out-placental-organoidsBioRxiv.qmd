@@ -1,0 +1,858 @@
+---
+title: "Bulk 2 - apical-out-placental-organoids "
+author: "Giada Guntri"
+date: 2025-09-30
+date-format: iso
+format: 
+    html:
+        embed-resources: true
+        toc: true
+        toc-depth: 6
+---
+
+# Description
+
+This script will generate the following plots and tables:
+
+\- Fig 4 a, b, c, d, e, f, g
+
+\- Supp Fig 3 a, b, c, d
+
+\- Supp Fig 4 a, b, c
+
+\- Supp Fig 5 b, c
+
+\- Supp Dat for Fig 4 c, d, e and Supp Fig 3 a, b, c, d
+
+# Preparations
+
+## load libraries
+
+```{r message=FALSE}
+#| label: libraries
+library(ggplot2)
+library(PCAtools)
+library(edgeR) 
+library(ComplexHeatmap)
+library(sva)
+library(ggrepel)
+library(dplyr)
+```
+
+## new folders
+
+```{r}
+#| label: folders
+plot_dir <- "Paper_Figures2"
+if (!file.exists(plot_dir)) {
+    dir.create(plot_dir, showWarnings = FALSE, recursive = FALSE)
+}
+
+table_dir <- "Paper_Tables2"
+if (!file.exists(table_dir)) {
+    dir.create(table_dir, showWarnings = FALSE, recursive = FALSE)
+}
+```
+
+## loading all the data
+
+```{r}
+#| label: data
+all_counts_orig <- read.delim("3797Fand3683F_raw_counts.uniqueID.20250919.tab", check.names=FALSE, stringsAsFactors=FALSE)
+  
+#Define symbol name of some genes of interest so they can be visualized in the volcano plots
+
+all_counts_orig$SYMBOL[all_counts_orig$ENSEMBL == "ENSG00000171084"] <- "FAM86JP"
+
+all_counts_orig$SYMBOL[all_counts_orig$ENSEMBL == "ENSG00000135248"] <- "FAM71F1"
+```
+
+## set up metadata
+
+```{r}
+#| label: metadata
+# Get only the sample columns
+
+sample_cols <- colnames(all_counts_orig)[6:ncol(all_counts_orig)]
+
+metadata <- data.frame(
+  sample = sample_cols,
+  id = sub("^(s\\d+)_.*", "\\1", sample_cols),
+  donor = sub("^s\\d+_(.*?)_.*_t\\d+$", "\\1", sample_cols),
+  damaged = sub("^s\\d+_.*?_(.*?)_t\\d+$", "\\1", sample_cols),
+  time = sub(".*_(t\\d+)$", "\\1", sample_cols),
+  stringsAsFactors = FALSE
+)
+
+
+metadata$time.numeric <- as.numeric(sub("t", "", metadata$time))
+
+metadata$time.char <- as.character(metadata$time.numeric)
+
+metadata$time_damaged <- paste0(metadata$time, "_", metadata$damaged)
+
+# Assign experiment numbers (first block = 3797, second block = 3683)
+# first 21 samples are 3797, last 7 are 3683
+metadata$experiment <- c(rep(3797, 21), rep(3683, 7))
+
+metadata$donor_experiment <- paste0(metadata$donor, "_", metadata$experiment)
+
+# View metadata
+metadata
+```
+
+## exclude time point 72
+
+in Y031
+
+```{r}
+#| label: exclude time point 72 in Y031
+counts_no72_Y031 <-cbind(all_counts_orig[,1:5 ],
+                    all_counts_orig[,metadata$sample[metadata$sample != "s21_Y031_d_t72"]])
+
+rownames(metadata) <- metadata$sample
+metadata_no72_Y031 <- metadata[metadata$sample != "s21_Y031_d_t72", , drop = FALSE]
+```
+
+# PCA and Heatmap
+
+## Batch correction by donor using ComBat-seq
+
+```{r}
+#| label: batch correction
+counts_no72_Y031.CBSeq_byD <- ComBat_seq(as.matrix(counts_no72_Y031[,-c(1:5)]), batch=metadata_no72_Y031$donor_experiment, group=NULL)
+#add back the row names
+rownames(counts_no72_Y031.CBSeq_byD) <- counts_no72_Y031$uniqueID
+```
+
+## PCA
+
+Fig 4 a
+
+PCA of batch corrected samples of the damage and regeneration timecourse, analysed by bulk RNA sequencing, coloured by time since damage (n=3 independent organoid lines).
+
+```{r}
+#| label: Fig 4 a
+
+# Define custom colors for the groups
+custom_colors <- c(t0_nd = 'grey60', t0_d = '#C49A00', t6_d = '#53B400', t12_d = '#00C094', t24_d = '#00B6EB', t48_d = '#A58AFF', t72_d = '#FB61D7')
+
+counts_no72_Y031.bc.cpm.pca <- pca(cpm(counts_no72_Y031.CBSeq_byD, log=TRUE), 
+                              metadata = metadata_no72_Y031, removeVar = 0.1)
+
+
+metadata_no72_Y031$time_damaged <- as.factor(metadata_no72_Y031$time_damaged)
+
+# Create the biplot with custom colors
+PCA <- biplot(counts_no72_Y031.bc.cpm.pca, 
+       colby = 'time_damaged', 
+       colkey = custom_colors,
+       pointSize = 5.5, 
+       lab = NULL, 
+       legendPosition = 'right')
+
+# Remove the unnecessary fill label
+PCA <- PCA + labs(fill = NULL)
+print(PCA)
+
+tiff(paste0(plot_dir, "/Figure_4_a.tiff"), width = 9, height = 7, units = "in", res = 300)
+print(PCA)
+dev.off()
+
+```
+
+## Heatmap
+
+Fig 4 b
+
+Heatmap depicting batch corrected centered and scaled counts per million (cpm) of selected genes across the damage regeneration time course
+
+### defining genes
+
+```{r}
+genes1 <- c("EGR1", "FOS", "JUN", "CCN2", "FOSB", "CCNG2", "MKI67", "PCNA",
+            "CCNA2", "TP63", "IL4R", "IL6R", "TNFRSF12A", "THBS1", "PLAUR",
+            "ARHGEF4", "CNN2", "LASP1", "GAL", "PTGES", "IL12RB2", "KRT17",
+            "AXL", "IGFBP4", "TNFRSF21", "FOSL1", "IFI27", "TCL1B","OVOL1", "STRA6",
+            "TWIST1", "PIK3AP1", "ENDOU", "GCM1", "MFSD2A", "CGA", "CGB3",
+            "CYP19A1",  "SDC1", "INSL4", "PSG3", "PSG6", "ERVV-1", "ERVV-2", 
+            "ERVW-1", "ERV3-1", "CSH1, CSHL1", "KISS1", "FLT1", "IL31RA") 
+
+genes1
+```
+
+### data to plot
+
+#### assemble data in custom order
+
+```{r}
+
+# assemble data in custom order
+
+new_samples <- c("s01_X113_nd_t0", "s02_X113_d_t0", "s03_X113_d_t6", "s04_X113_d_t12",        
+                 "s05_X113_d_t24", "s06_X113_d_t48", "s07_X113_d_t72", "s08_Y060_nd_t0", 
+                 "s09_Y060_d_t0", "s10_Y060_d_t6", "s11_Y060_d_t12", "s12_Y060_d_t24",                   
+                 "s13_Y060_d_t48", "s14_Y060_d_t72", "s15_Y031_nd_t0", "s16_Y031_d_t0", 
+                 "s17_Y031_d_t6", "s18_Y031_d_t12", "s19_Y031_d_t24", "s20_Y031_d_t48",
+                 "s22_X113_nd_t0", "s23_X113_d_t0", "s24_X113_d_t6", "s25_X113_d_t12",
+                 "s26_X113_d_t24", "s27_X113_d_t48", "s28_X113_d_t72") 
+
+# Create the custom order without duplicates 
+custom_order <- unique(c(   
+  grep("nd_t0", new_samples, value = TRUE),   
+  grep("d_t0", new_samples, value = TRUE),   
+  grep("d_t6", new_samples, value = TRUE),   
+  grep("d_t12", new_samples, value = TRUE),   
+  grep("d_t24", new_samples, value = TRUE),  
+  grep("d_t48", new_samples, value = TRUE),   
+  grep("d_t72", new_samples, value = TRUE) ))  
+
+# Print the custom order to verify 
+print(custom_order)
+```
+
+#### calculate cpm values
+
+```{r}
+
+counts_no72_Y031.bc.cpm <- cpm(counts_no72_Y031.CBSeq_byD, log=FALSE)
+
+
+data2plot1bc <- data.frame()
+
+for (gene in unique(genes1)) {
+  if (gene %in% rownames(counts_no72_Y031.bc.cpm)) {
+    data2plot1bc <- rbind(data2plot1bc, counts_no72_Y031.bc.cpm[rownames
+    (counts_no72_Y031.bc.cpm) == gene,])}
+  }  
+
+rownames(data2plot1bc) <- unique(genes1[genes1 %in% rownames(counts_no72_Y031.bc.cpm)])
+
+colnames(data2plot1bc) <- colnames(counts_no72_Y031.bc.cpm)  
+
+data2plot1bc.sc <- t(scale(t(data2plot1bc))) 
+
+# Reorder the columns in the data frame 
+data2plot1bc.sc <- data2plot1bc.sc[, custom_order] 
+```
+
+### and plot
+
+```{r}
+#| label: Fig 4 b
+
+# Create the heatmap with the custom order 
+plot1bc <- Heatmap(data2plot1bc.sc, cluster_columns = FALSE, cluster_rows = FALSE,
+                   heatmap_legend_param = list(title = "cpm (c/s)", color_bar = "continuous"),
+                   column_title = "Regeneration",
+                   bottom_annotation = NULL)  
+
+# Display and save the heatmap
+tiff(paste0(plot_dir, "/Figure_4_b.tiff"), width = 10, height = 12, units = "in", res = 300) 
+
+print(plot1bc)
+
+dev.off()
+```
+
+# Differential gene expression analysis
+
+## preparing the metadata
+
+```{r}
+donor = metadata_no72_Y031$donor
+time = metadata_no72_Y031$time
+damaged = metadata_no72_Y031$damaged
+experiment = metadata_no72_Y031$experiment
+donor3 = metadata_no72_Y031$donor_experiment
+time3 = metadata_no72_Y031$time_damaged
+```
+
+## generate DGEList object
+
+We work with the raw counts
+
+```{r}
+counts_no72_Y031.asDGEList <- DGEList(counts=counts_no72_Y031[,-c(1:5)],genes=counts_no72_Y031[,1:5]  )
+
+rownames(counts_no72_Y031.asDGEList$counts) <- rownames(counts_no72_Y031.asDGEList$genes) <- counts_no72_Y031.asDGEList$genes$uniqueID 
+```
+
+#### filter lowly expressed genes
+
+```{r}
+mincpm <- 1
+minsamples <- 4
+
+counts_no72_Y031.asDGEList.cpm <- cpm(counts_no72_Y031.asDGEList,  log = FALSE)
+
+
+counts_no72_Y031.asDGEList <- counts_no72_Y031.asDGEList[ rowSums(counts_no72_Y031.asDGEList.cpm > mincpm) >= minsamples, , keep.lib.size=FALSE] 
+```
+
+#### Normalization
+
+```{r}
+counts_no72_Y031.asDGEList <- calcNormFactors(counts_no72_Y031.asDGEList)   # same as normLibSizes(y)
+head(counts_no72_Y031.asDGEList$samples)
+plotMDS(counts_no72_Y031.asDGEList)
+```
+
+## Box plots
+
+Figure 4 f, g, Supplemental Figure 4 a, b, and Supplemental Figure 5 b, c
+
+```{r}
+
+#| label: Fig 4 f, g Supp Fig 4 a, b, Supp Fig 5 b, c
+
+
+# Define genes of interest
+basal_list <- data.frame(gene = c("TNFSF12", "IL6R", "IL4R", "IL6", "TNFRSF12A", "THBS1", "IL4", "EPS8L1"))
+
+# Define the desired timepoint order
+time_order <- c("nd_t0", "d_t0", "d_t6", "d_t12", "d_t24", "d_t48", "d_t72")
+custom_colors <- c(
+  "nd_t0" = 'grey60',
+  "d_t0" = '#C49A00',
+  "d_t6" = '#53B400',
+  "d_t12" = '#00C094',
+  "d_t24" = '#00B6EB',
+  "d_t48" = '#A58AFF',
+  "d_t72" = '#FB61D7'
+)
+
+# Loop through each gene of interest
+for (i in seq_len(nrow(basal_list))) {
+  
+  mygene <- basal_list$gene[i]
+  
+  # Check if gene exists in the expression matrix
+  if (!(mygene %in% rownames(counts_no72_Y031.asDGEList.cpm))) {
+    warning(paste("Gene", mygene, "not found in expression matrix. Skipping."))
+    next
+  }
+  
+  myENTREZ <- as.character(na.omit(all_counts_orig$uniqueID[all_counts_orig$SYMBOL == mygene]))
+  expr.values <- counts_no72_Y031.asDGEList.cpm[mygene, ]
+  
+  df2plot <- data.frame(samples = colnames(counts_no72_Y031.asDGEList.cpm), cpm = expr.values)
+  df2plot_withMetadata <- merge(df2plot, metadata_no72_Y031, by.x = "samples", by.y = 0, sort = FALSE)
+  
+  # Create a new column for time group from sample names
+  df2plot_withMetadata$time_group <- gsub(".*_(nd|d)_t(\\d+)", "\\1_t\\2", df2plot_withMetadata$samples)
+  df2plot_withMetadata$time_group <- factor(df2plot_withMetadata$time_group, levels = time_order)
+  
+  # Save plot as TIFF
+  tiff(filename = paste0(plot_dir, "/", mygene, ".tiff"), width = 3200, height = 2400, res = 300)
+  
+p <- ggplot(df2plot_withMetadata, aes(x = time_group, y = cpm, fill = time_group)) +
+    geom_boxplot(outlier.shape = NA, color = "black") +
+    geom_jitter(aes(shape = donor3, fill = time_group),
+                position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6),
+                size = 4, stroke = 1, color = "black") +
+    scale_shape_manual(values = c(21, 22, 23, 24)) +
+    scale_fill_manual(values = custom_colors) +
+    labs(
+      title = paste(myENTREZ, " ('", mygene, "')"),
+      x = "Time Group", y = "CPM"
+    ) +
+    theme_bw(base_size = 15) +
+    theme(axis.text.x = element_text(size = 13))
+  
+  print(p)
+  dev.off()
+}
+
+```
+
+## Setting up the design matrix
+
+before damage
+
+```{r}
+t0_nd <- damaged== "nd" & time == "t0"
+```
+
+T0
+
+```{r}
+t0_d <- damaged== "d" & time == "t0"
+```
+
+T6
+
+```{r}
+t6_d <- damaged== "d" & time == "t6"
+```
+
+T12
+
+```{r}
+t12_d <- damaged== "d" & time == "t12"
+```
+
+T24
+
+```{r}
+t24_d <- damaged== "d" & time == "t24"
+```
+
+T48
+
+```{r}
+t48_d <- damaged== "d" & time == "t48"
+```
+
+T72
+
+```{r}
+t72_d <- damaged== "d" & time == "t72"
+```
+
+## Volcano plots where we compare to Before Damage
+
+use model.matrix (do not include t0_d)
+
+```{r}
+design <- model.matrix(~donor3 + t0_d + t6_d + t12_d + t24_d + t48_d + t72_d)
+
+rownames(design) <- colnames(counts_no72_Y031.asDGEList)
+design
+```
+
+### Dispersion estimation
+
+```{r}
+counts_no72_Y031.asDGEList.disp <- estimateDisp(counts_no72_Y031.asDGEList, design, robust = TRUE)
+counts_no72_Y031.asDGEList.disp$common.dispersion
+
+plotBCV(counts_no72_Y031.asDGEList.disp)
+
+fit <- glmQLFit(counts_no72_Y031.asDGEList.disp, design)
+
+plotQLDisp(fit)
+```
+
+### Differential expression
+
+#### Damage time 0 vs Before damage
+
+Supplemental Figure 3 a, b and Supplemental Table S3
+
+```{r}
+#| label: Supp Fig 3 b and Supp Table S3
+
+qlf_1 <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "t0_dTRUE") * +1 ))
+topTags(qlf_1)
+
+tt_1 <- as.data.frame(topTags(qlf_1,n=nrow(counts_no72_Y031.asDGEList)))
+
+# Modify the status column based on logFC and FDR
+tt_modified_1 <- tt_1 %>%
+  mutate(status = factor(case_when(
+    logFC > 2 & FDR < 0.05 ~ "up",
+    logFC < (-2) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+
+write.csv(tt_modified_1, file = paste0(table_dir, "/D0 vs BD.csv"), row.names = FALSE)
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified_1, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("D0 vs ND0; logFC > |2|, logCPM > 1, PValue < 0.05") +
+  theme(plot.title = element_text(size = 30, face = "bold.italic"),
+        axis.title = element_text(size = 30, face = "bold"),
+        axis.text = element_text(size = 30)) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.00660125146985328), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -2, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified_1 %>% filter(SYMBOL %in% c("EGR1", "FOS", "JUN", "FOSB", "CSHL1", "CGB1", "CGB5", "TCL1B", "SDC1", "PSG8", "CYP19A1", "TWIST1", "INSL4", "SLC26A1", "S100P", "CXCL11", "ENDOU", size = 7 )), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+
+
+tiff(paste0(plot_dir, "/SuppFigure_3_b.tiff"), width = 10, height = 8, units = "in", res = 300)
+print(vplot)
+dev.off()
+# Display the plot
+print(vplot)
+
+```
+
+#### Damage time 72 vs Before damage
+
+Supplemental Figure 3 A and Supplemental Table S3
+
+```{r}
+#| label: Supp Fig 3 a and Supp Table S3
+
+qlf_7 <- glmQLFTest(fit,contrast=as.vector((colnames(design) == "t72_dTRUE") * +1) )
+
+topTags(qlf_7)
+
+tt_7 <- as.data.frame(topTags(qlf_7,n=nrow(counts_no72_Y031.asDGEList)))
+
+# Modify the status column based on logFC and FDR
+tt_modified_7 <- tt_7 %>%
+  mutate(status = factor(case_when(
+    logFC > 2 & FDR < 0.05 ~ "up",
+    logFC < (-2) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+
+write.csv(tt_modified_7, file = paste0(table_dir, "/D72 vs BD.csv"), row.names = FALSE)
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified_7, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("ND0 vs D72; logFC > |2|, logCPM > 1, PValue < 0.05") +
+    theme(plot.title = element_text(size = 30, face = "bold.italic"),
+        axis.title = element_text(size = 30, face = "bold"),
+        axis.text = element_text(size = 30)) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.00641132371289005), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -2, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified_7 %>% filter(SYMBOL %in% c("APOA2", "IFI27", "FAM86JP", "IGFBP3", "PALD1", "SPNS2", "FAM71F1", 
+                         "IL2RG", "RNF157", "PNCK", "PLAC8", "SLC6A8", "IFITM1", "SLCO4A1", 
+                         "IFIT1", "IL31RA", "XAF1", "PAPPA2", "VTCN1",
+ size = 7)
+), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+# Save the plot
+tiff(paste0(plot_dir, "/SuppFigure_3_a.tiff"), width = 10, height = 8, units = "in", res = 300)
+print(vplot)
+dev.off()
+
+# Display the plot
+print(vplot)
+```
+
+## Volcano plots where we compare to Damage time 0
+
+New model.matrix (do not include MG.21p.5)
+
+```{r}
+design <- model.matrix(~donor3 + t0_nd + t6_d + t12_d + t24_d + t48_d + t72_d)
+
+rownames(design) <- colnames(counts_no72_Y031.asDGEList)
+design
+```
+
+### Dispersion estimation and fitting
+
+```{r}
+counts_no72_Y031.asDGEList.disp <- estimateDisp(counts_no72_Y031.asDGEList, design, robust = TRUE)
+counts_no72_Y031.asDGEList.disp$common.dispersion
+
+plotBCV(counts_no72_Y031.asDGEList.disp)
+```
+
+```{r}
+fit <- glmQLFit(counts_no72_Y031.asDGEList.disp, design)
+
+plotQLDisp(fit)
+```
+
+### Differential expression
+
+#### Damage time 6 vs Damage time 0
+
+Figure 4 D and Supplemental Table S3
+
+```{r}
+#| label: Fig 4 d and Supp Table S3
+
+qlf_2 <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "t6_dTRUE") * +1 ))
+topTags(qlf_2)
+
+summary(decideTests(qlf_2))
+
+plotMD(qlf_2)
+abline(h=c(-1, 1), col="black")
+tt_2 <- as.data.frame(topTags(qlf_2,n=nrow(counts_no72_Y031.asDGEList)))
+
+
+# Modify the status column based on logFC and FDR
+tt_modified_2 <- tt_2 %>%
+  mutate(status = factor(case_when(
+    logFC > 2 & FDR < 0.05 ~ "up",
+    logFC < (-2) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+write.csv(tt_modified_2, file = paste0(table_dir, "/D6 vs D0.csv"), row.names = FALSE)
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified_2, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("D0 versus T6; logFC > |2|, logCPM > 1, PValue < 0.05") +
+    theme(plot.title = element_text(size = 30, face = "bold.italic"),
+        axis.title = element_text(size = 30, face = "bold"),
+        axis.text = element_text(size = 30)) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.0168406137075142), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -2, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified_2 %>% filter(SYMBOL %in% c("EGR1", "KRT14", "FOS", "SIRPB2", "VTN", "KRT17", "FIGNL2", "THBS1", 
+                         "CDKN2C", "IL12RB2", "CCNG2", "TSC22D3", "CD69", "ITGA2", "AXL", 
+                         "IL6", "PLAUR", "IGFBP4", "TNFRSF12A", "GPRC5A", "SOX12", "SPHK1", size = 7)
+), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+# Save the plot
+tiff(paste0(plot_dir, "/Figure_4_d.tiff"), width = 10, height = 8, units = "in", res = 300)
+print(vplot)
+dev.off()
+
+# Display the plot
+print(vplot)
+```
+
+#### Damage time 12 vs Damage time 0
+
+Figure 4 E and Supplemental Table S3
+
+```{r}
+#| label: Fig 4 e and Supp Table S3
+
+qlf_3 <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "t12_dTRUE") * + 1 ))
+topTags(qlf_3)
+tt_3 <- as.data.frame(topTags(qlf_3,n=nrow(counts_no72_Y031.asDGEList)))
+
+
+# Modify the status column based on logFC and FDR
+tt_modified_3 <- tt_3 %>%
+  mutate(status = factor(case_when(
+    logFC > 2 & FDR < 0.05 ~ "up",
+    logFC < (-2) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+
+write.csv(tt_modified_3, file = paste0(table_dir, "/D12 vs D0.csv"), row.names = FALSE)
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified_3, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("D12 vs D0; logFC > |2|, logCPM > 1, PValue < 0.05") +
+    theme(plot.title = element_text(size = 30, face = "bold.italic"),
+        axis.title = element_text(size = 30, face = "bold"),
+        axis.text = element_text(size = 30)) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.0165027508617822), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -2, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified_3 %>% filter(SYMBOL %in%  c("EGR1", "KRT14", "FOS", "THBS1", "FOSB", "GPRC5A", "CDKN2C", "ITGA2", 
+ "VTN", "IL12RB2", "GH2", "KRT17", "SIRPB2", "AXL", "IL1R2", "ITGA1", 
+ "CYP1A1", "NOG", "SPRR3", "FGF1", "RBP4", size = 7)
+), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+# Save the plot
+tiff(paste0(plot_dir, "/Figure_4_e.tiff"), width = 10, height = 8, units = "in", res = 300)
+print(vplot)
+dev.off()
+
+
+# Display the plot
+print(vplot)
+```
+
+#### Damage time 24 vs Damage time 0
+
+Supplemental Figure 3 C and Supplemental Table S3
+
+```{r}
+#| label: Supplemetnal Supp Fig 3 c and Supp Table S3
+
+qlf_4 <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "t24_dTRUE") * + 1 ))
+topTags(qlf_4)
+tt_4 <- as.data.frame(topTags(qlf_4,n=nrow(counts_no72_Y031.asDGEList)))
+
+# Modify the status column based on logFC and FDR
+tt_modified_4 <- tt_4 %>%
+  mutate(status = factor(case_when(
+    logFC > 2 & FDR < 0.05 ~ "up",
+    logFC < (-2) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+write.csv(tt_modified_4, file = paste0(table_dir, "/D24 vs D0.csv"), row.names = FALSE)
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified_4, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("D24 vs D0; logFC > |2|, logCPM > 1, PValue < 0.05") +
+    theme(plot.title = element_text(size = 30, face = "bold.italic"),
+        axis.title = element_text(size = 30, face = "bold"),
+        axis.text = element_text(size = 30)) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.006211311), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -2, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified_4 %>% filter(SYMBOL %in%  c("EGR1", "KRT14", "FOS", "CYP1A1", "VTN", "ITGA1", "FOSB", "IFI27", 
+"JUN", "KRT17", "GPRC5A", "TCL1B", "STRA6", "ALPP", "DHRS9", 
+"PIK3AP1", "ALPG", size = 7 )), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+
+
+# Save the plot
+tiff(paste0(plot_dir, "/SuppFigure_3_c.tiff"), width = 10, height = 8, units = "in", res = 300)
+print(vplot)
+dev.off()
+
+# Display the plot
+print(vplot)
+```
+
+#### Damage time 48 vs Damage time 0
+
+Supplemental Figure 3 D and Supplemental Table S3
+
+```{r}
+#| label: Supp Fig 3 d and Supp Table S3
+
+qlf_5 <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "t48_dTRUE") * + 1 ))
+topTags(qlf_5)
+tt_5 <- as.data.frame(topTags(qlf_5,n=nrow(counts_no72_Y031.asDGEList)))
+
+
+# Modify the status column based on logFC and FDR
+tt_modified_5 <- tt_5 %>%
+  mutate(status = factor(case_when(
+    logFC > 2 & FDR < 0.05 ~ "up",
+    logFC < (-2) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+
+write.csv(tt_modified_5, file = paste0(table_dir, "/D48 vs D0.csv"), row.names = FALSE)
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified_5, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("D48 vs D0; logFC > |2|, logCPM > 1, PValue < 0.05") +
+    theme(plot.title = element_text(size = 30, face = "bold.italic"),
+        axis.title = element_text(size = 30, face = "bold"),
+        axis.text = element_text(size = 30)) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.011593291980048), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -2, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified_5 %>% filter(SYMBOL %in% c("EGR1", "FOS", "JUN","CP", "TCL1B", "PSG9", "S100P", "SLC1A2", "CGB5", "MFSD2A", "ENDOU", "PSG4"  , size = 7, max.overlaps = Inf)
+), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+# Save the plot
+tiff(paste0(plot_dir, "/SuppFigure_3_d.tiff"), width = 10, height = 8, units = "in", res = 300)
+print(vplot)
+dev.off()
+
+# Display the plot
+print(vplot)
+getwd()
+```
+
+#### Damage time 72 vs Damage time 0
+
+Figure 4 C and Supplemental Table S3
+
+```{r}
+#| label: Fig 4 c and Supp Table S3
+
+qlf_6 <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "t72_dTRUE") * + 1 ))
+topTags(qlf_6)
+tt_6 <- as.data.frame(topTags(qlf_6,n=nrow(counts_no72_Y031.asDGEList)))
+
+
+
+# Modify the status column based on logFC and FDR
+tt_modified_6 <- tt_6 %>%
+  mutate(status = factor(case_when(
+    logFC > 2 & FDR < 0.05 ~ "up",
+    logFC < (-2) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+
+write.csv(tt_modified_6, file = paste0(table_dir, "/D72 vs D0.csv"), row.names = FALSE)
+
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified_6, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("D72 vs D0; logFC > |2|, logCPM > 1, PValue < 0.05") +
+    theme(plot.title = element_text(size = 30, face = "bold.italic"),
+        axis.title = element_text(size = 30, face = "bold"),
+        axis.text = element_text(size = 30)) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.0176007843532707), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -2, linetype = "dashed", color = "black") +
+  geom_label_repel(data = tt_modified_6 %>% filter(SYMBOL %in% c("EGR1","FOS", "JUN", "CP", "FAM20A", "CCN2", "LGR5", "SLC2A11", "EPS8L1", "TCL1B", "CXCL11", "CYP11A1", "GPRC5A", "ERVW-1", "CGB5", "SDC1", "PSG7", "CGB3", "ENDOU","CYP19A1", size = 7 ) ), aes(label = SYMBOL), size = 6,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+# Save the plot
+tiff(paste0(plot_dir, "/Figure_4_c.tiff"), width = 10, height = 8, units = "in", res = 300)
+print(vplot)
+dev.off()
+
+# Display the plot
+print(vplot)
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
