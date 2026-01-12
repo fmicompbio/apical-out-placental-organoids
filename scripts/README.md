@@ -10,6 +10,10 @@ The genome sequence (GRCh38.primary_assembly.genome.fa) can be downloaded from h
 
 This script will generate the following plots and tables: - Fig 2 b, d; - Supp Fig 1 d; - Supp Dat for Fig 2 b
 
-# 3) Bulk 2 - apical-out-placental-organoids.qmd 
+# 3) Bulk 2 - apical-out-placental-organoidsRxiv.qmd 
 
-This script will generate the following plots and tables: - Fig 4 a, b, c, d, e, f; g;- Supp Fig 3 a, b, c, d; - Supp Fig 4 a, b; - Supp Fig 5 b, c; - Supp Dat for Fig 4 c, d, e and Supp Fig 3 a, b, c, d.
+This script will generate the following plots and tables for the bioRxiv submission : - Fig 4 a, b, c, d, e, f; g;- Supp Fig 3 a, b, c, d; - Supp Fig 4 a, b; - Supp Fig 5 b, c; - Supp Dat for Fig 4 c, d, e and Supp Fig 3 a, b, c, d.
+
+# 4) Bulk 2 - apical-out-placental-organoids.qmd 
+
+This script will generate the following plots and tables for the journal submission : -This script will generate the following plots and tables: - Fig 4 a, b, c, d, e, f; - Fig 5 a, c; - Supp Fig 3 a, b, c, d; - Supp Fig 4 a, d;- Supp Fig 5 b, c;- Supp Dat for Fig 4 c, d, e and Supp Fig 3 a, b, c, d
