@@ -1,0 +1,102 @@
+---
+title: "Proteomics - apical out placental organoids"
+author: "Giada Guntri / HRH"
+date: 2026-10-14
+date-format: iso
+format: 
+    html:
+        embed-resources: true
+        toc: true
+        toc-depth: 6
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+## 0) preparations
+
+### Data / Description
+
+- *This script will generate the following plot:*
+
+  *- Supp Fig 1 D*
+
+### Initialize R
+
+```{r message=FALSE}
+#| label: initialize
+
+library(SingleCellExperiment)
+library(einprot)
+library(ComplexHeatmap)
+```
+
+### Load data
+
+```{r}
+#| label: load-data and center
+
+# To generate the needed file, first run the script "Einprot_Output.R"
+
+sce_file <- "wo_S07_S08_S11_S12_CScore7/Spectronaut_4758_PG.Quantity_MinProbGlobal_center.median.shared_limma_einprot0.10.2_sce.rds"
+
+sce <- readRDS(sce_file)
+
+
+norm.counts <- assay(sce, "log2_PG.Quantity_norm")
+dim(norm.counts)
+
+norm.counts.c <- t(scale(t(norm.counts),center = TRUE, scale = FALSE))
+```
+
+### Select genes
+
+```{r}
+#| label: genes of interest
+
+# Gene list
+
+gene_list_1 <- c("CDH1","CGA","CGB3","CSH1","GDF15",
+                 "PSG1","PSG2","PSG3","PSG4","PSG5","PSG6","PSG9",
+                 "FLT1","LAMC1","NID1","NID2","VIM","HSD17B1","ERVFRD-1","GFPT1")
+
+# check presence
+length(gene_list_1)
+
+sum(gene_list_1 %in% rownames(norm.counts))
+
+```
+
+## 1) Prepare the matrix
+
+```{r}
+#| label: prepare-matrix
+
+#center and scale
+norm.counts.cs <- t(scale(t(norm.counts),center = TRUE, scale = TRUE))
+
+# and now select
+norm.counts.c.sel1 <- norm.counts.c[rownames(norm.counts.c) %in% gene_list_1,c(2:4,6:8)]
+norm.counts.c.sel1 <- norm.counts.c.sel1[match(gene_list_1, rownames(norm.counts.c.sel1)),]
+
+```
+
+## 2) Plot
+
+```{r}
+tiff("Sfigure1d.tiff",
+     width = 2000,
+     height = 6000,
+     res = 300)
+
+Heatmap(norm.counts.c.sel1, cluster_rows = FALSE, cluster_columns = FALSE) 
+
+dev.off()
+```
+
+## 3) sessionInfo
+
+```{r}
+#| label: sessionInfo
+sessionInfo()
+```

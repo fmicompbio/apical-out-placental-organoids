@@ -1,0 +1,869 @@
+---
+title: "Bulk 1 - apical out placental organoids "
+author: "Giada Guntri / HRH"
+date: 2026-08-14
+date-format: iso
+format: 
+    html:
+        embed-resources: true
+        toc: true
+        toc-depth: 6
+---
+
+# Description
+
+This script will generate the following plots and tables:
+
+\- Fig 2 b, d, c, j
+
+\- Supp Table 1
+
+# 0) Preparations
+
+## load libraries
+
+```{r message=FALSE}
+#| label: libraries
+library(edgeR) 
+library(PCAtools)
+library(sva)
+library(ComplexHeatmap)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+
+library(SingleCellExperiment)
+library(BayesPrism)
+library(forcats)
+library(patchwork)
+
+```
+
+## new folders
+
+```{r}
+#| label: folders
+plot_dir <- "Paper_Figures"
+if (!file.exists(plot_dir)) {
+    dir.create(plot_dir, showWarnings = FALSE, recursive = FALSE)
+}
+
+table_dir <- "Paper_Tables"
+if (!file.exists(table_dir)) {
+    dir.create(table_dir, showWarnings = FALSE, recursive = FALSE)
+}
+```
+
+## loading all the data
+
+### original data
+
+```{r}
+#| label: data
+all_counts_orig <- read.delim("3574F_raw_counts.uniqueID.20260730.tab")
+rownames(all_counts_orig) <- all_counts_orig$uniqueID
+
+# exclude day 10
+all_counts_orig_selected <- all_counts_orig[,c(1:12,15:21,24:30)]
+colnames(all_counts_orig_selected)
+```
+
+### new data
+
+```{r}
+#| label: new data
+all_counts_new <- read.delim("4299F_raw_counts.uniqueID.20260730.tab")
+rownames(all_counts_new) <- all_counts_new$uniqueID
+# exclude day 10
+all_counts_new_selected <- all_counts_new[,c(1:12,15:21,24:30)]
+colnames(all_counts_new_selected)
+```
+
+### combine
+
+```{r}
+#| label: combine data
+identical(rownames(all_counts_orig_selected),rownames(all_counts_new_selected))
+
+all_counts_selected <- cbind(all_counts_orig_selected,all_counts_new_selected[,-c(1:5)])
+colnames(all_counts_selected)
+
+# fix order of day 8 in Z149
+all_counts_selected <- all_counts_selected[,c(1:45,47,46)]
+colnames(all_counts_selected)
+```
+
+## set up metadata
+
+```{r}
+#| label: metadata
+# Get only the sample columns
+sample_cols <- colnames(all_counts_selected)[6:ncol(all_counts_selected)]
+
+# Donor to sex mapping
+donor_sex <- c(
+  "X113" = "female",
+  "Y031" = "female",
+  "X087" = "male",
+  "Z143" = "male",
+  "Z107" = "male",
+  "Z149" = "female"
+)
+
+# Create metadata
+metadata <- data.frame(
+  donor = sub("_.*", "", sample_cols),
+  #number = seq(133, by=1, length.out = length(sample_cols)),  # adjust start number if needed
+  time = as.numeric(sub(".*_(\\d+)d_.*", "\\1", sample_cols)),
+  media = sub(".*_(MG|SP)$", "\\1", sample_cols),
+  oxygen = "21p",
+  mf = donor_sex[sub("_.*", "", sample_cols)],
+  sample = paste0("X", seq(1, length(sample_cols)))
+)
+
+# Set rownames as the sample column names
+rownames(metadata) <- sample_cols
+
+# Add the time.char column as a character type
+metadata <- data.frame(metadata,
+                       time.char = as.character(metadata$time))
+#make a factor for metadata_all$time.char
+metadata$time.char <- factor(metadata$time.char, levels = c("1", "2", "3", "5","6","7","8"))
+
+metadata <- data.frame(metadata,
+                       time.med = paste(metadata$media, metadata$time))
+
+# Make a factor for metadata$time.char with specific levels
+metadata$time.med <- factor(metadata$time.med, levels = c("MG 5", "MG 6", "MG 7", "MG 8","SP 1", "SP 2", "SP 3"))
+
+# View metadata
+metadata
+```
+
+# 1) DGE: MG versus SP at individual (time) points
+
+## prepare the metadata
+
+```{r}
+donor = metadata$donor
+media = metadata$media
+time = metadata$time
+```
+
+## generate DGEList object
+
+We work with the raw counts
+
+```{r}
+#| label: DGE
+all_counts_selected.asDGEList <- DGEList(counts=all_counts_selected[,-c(1:5)],genes=all_counts_selected[,c(1:5)])
+```
+
+### filter lowly expressed genes
+
+We have 6 replicas (aka donors)
+
+```{r}
+#| label: filtering
+mincpm <- 1 
+minsamples <- 6  
+
+all_counts_selected.asDGEList.cpm <- edgeR::cpm(all_counts_selected.asDGEList, log = FALSE)
+
+all_counts_selected.asDGEList <- all_counts_selected.asDGEList[rowSums(all_counts_selected.asDGEList.cpm > mincpm) >= minsamples, , keep.lib.size=FALSE] 
+```
+
+### normalization
+
+```{r}
+#| label: normalization
+all_counts_selected.asDGEList <- calcNormFactors(all_counts_selected.asDGEList)   # same as normLibSizes(y) 
+head(all_counts_selected.asDGEList$samples) 
+plotMDS(all_counts_selected.asDGEList)
+```
+
+## setting up the design matrix
+
+day 5
+
+```{r}
+MG.21p.5 <- media== "MG" & time == "5"
+```
+
+day 6
+
+```{r}
+MG.21p.6 <- media== "MG" & time == "6"
+SP.21p.1 <- media== "SP" & time == "1"
+```
+
+day 7
+
+```{r}
+MG.21p.7 <- media== "MG" & time == "7"
+SP.21p.2 <- media== "SP" & time == "2"
+```
+
+day 8
+
+```{r}
+MG.21p.8 <- media== "MG" & time == "8"
+SP.21p.3 <- media== "SP" & time == "3"
+```
+
+use model.matrix (do not include MG.21p.5)
+
+```{r}
+#| label: design
+design <- model.matrix(~donor+MG.21p.6+ SP.21p.1+
+                              MG.21p.7+ SP.21p.2+
+                              MG.21p.8+ SP.21p.3)
+
+rownames(design) <- colnames(all_counts_selected.asDGEList)
+design
+```
+
+## dispersion estimation and fitting
+
+```{r}
+#| label: dispersion
+all_counts_selected.asDGEList.disp <- estimateDisp(all_counts_selected.asDGEList, design, robust = TRUE)
+all_counts_selected.asDGEList.disp$common.dispersion
+
+plotBCV(all_counts_selected.asDGEList.disp)
+```
+
+```{r}
+#| label: fitting
+fit <- glmQLFit(all_counts_selected.asDGEList.disp, design)
+
+plotQLDisp(fit)
+```
+
+## Differential expression: Day 8 MG versus Day 8(3) SP
+
+```{r}
+#| label:  differential expression
+(colnames(design) == "SP.21p.3TRUE") * 1  + (colnames(design) == "MG.21p.8TRUE") * -1
+
+qlf <- glmQLFTest(fit, contrast=as.vector((colnames(design) == "SP.21p.3TRUE") * 1  + (colnames(design) == "MG.21p.8TRUE") * -1) )
+
+summary(decideTests(qlf))
+summary(decideTests(qlf, p.value = 0.05, lfc = 1))
+
+plotMD(qlf)
+abline(h=c(-1, 1), col="blue")
+
+topTags(qlf)
+```
+
+### define up and down regulated genes
+
+```{r}
+#| label: Supp Table 1
+
+tt <- as.data.frame(topTags(qlf, n = nrow(all_counts_selected.asDGEList)))
+
+# modify the status column based on logFC and FDR
+tt_modified <- tt %>%
+  mutate(status = factor(case_when(
+    logFC > 1 & FDR < 0.05 ~ "up",
+    logFC < (-1) & FDR < 0.05 ~ "down",
+    TRUE ~ "ns"
+  ), levels = c("up", "ns", "down")))
+
+
+write.csv(tt_modified, file = paste0(table_dir, "/Table_S1.csv"), row.names = FALSE)
+
+
+# filter the data to exclude 'ns' status
+tt_filtered <- tt_modified %>% filter(status != "ns")
+
+```
+
+### volcano plot
+
+figure 2 d
+
+```{r}
+#| label: Fig 2 d
+
+# Create the volcano plot with -log10(PValue) on the y-axis
+vplot <- ggplot(tt_modified, aes(x = logFC, y = -log10(PValue), color = status)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("firebrick", "grey", "dodgerblue")) +
+  ggtitle("SP vs MG; abs(logFC) > 1, logCPM > 1, PValue < 0.05") +
+  theme(plot.title = element_text(size = 25, face = "bold.italic"),
+        axis.title = element_text(size = 22, face = "bold"),
+        axis.text = element_text(size = 18)) +
+  guides(color = guide_legend(override.aes = list(size = 2))) +
+  theme_bw() +
+  geom_hline(yintercept = -log10(0.010844), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = -1, linetype = "dashed", color = "black") +
+ 
+geom_label_repel(
+  data = tt_modified %>% 
+    filter(SYMBOL %in% c("CDH3","FRAS1", "FREM2","LGR5","ADAMTS19","IFITM1","OASL",
+                         "ERVV-1","HSD3B1","CGB3", "CYP11A1","CGB5","HSD17B1", "CSH1, CSHL1","LHB","AQP3", "PGF","CGB8","CGB2",
+                         "CCL5","STAT1","IRF7","ISG15","IFIT1")),
+  aes(label = SYMBOL),
+  size = 7,
+                   box.padding = 0.5,
+                   point.padding = 0.5,
+                   max.overlaps = Inf,
+                   segment.color = 'grey50'
+  )
+
+
+# display (and save) the plot
+print(vplot)
+
+
+tiff(paste0(plot_dir, "/Figure_2_D.tiff"), width = 9, height = 7, units = "in", res = 300)
+    print(vplot)
+dev.off()
+```
+
+# 2) PCA
+
+## Batch correction by donor using ComBat-seq
+
+```{r message=FALSE, warning=FALSE}
+#| label: batch correction
+all_counts_selected.CBSeq_byD <- ComBat_seq(as.matrix(all_counts_selected[,-c(1:5)]), batch=metadata$donor, group=NULL)
+row.names(all_counts_selected.CBSeq_byD) <- row.names(all_counts_selected)
+```
+
+## PCA
+
+PCA of batch corrected samples of a timecourse of apical-in vs apical-out analysed by bulk RNA sequencing, coloured by time and apical conformation (n=6 independent organoid lines). figure 2 b
+
+```{r}
+#| label: Fig 2 b
+custom_colors <- c("MG 5" = '#C4DEE6',
+                   "MG 6" = '#5FC5E4',
+                   "MG 7" = '#1E90FF',
+                   "MG 8" = '#00008F',
+
+  "SP 1" = "#F08BC4", 
+  "SP 2" = "#E6007E",  
+  "SP 3" = "#7A004B"
+)
+
+
+all_counts_selected.bc.cpm.pca <- pca(edgeR::cpm(all_counts_selected.CBSeq_byD, log=TRUE), 
+                              metadata = metadata, removeVar = 0.1)
+
+
+
+
+
+# Create the biplot with custom colors
+PCA <- biplot(all_counts_selected.bc.cpm.pca, 
+       colby = "time.med",
+       legendPosition = 'right',
+       title = "PCA",
+       encircle = FALSE, 
+       lab = NULL,
+       pointSize = 7.5,
+       colkey = custom_colors)
+
+#Remove the unnecessary fill label
+PCA <- PCA + labs(fill = NULL)
+# display (and save) the plot
+PCA
+
+tiff(paste0(plot_dir, "/Figure_2_B.tiff"), width = 9, height = 9, units = "in", res = 300)
+print(PCA)
+dev.off()
+```
+
+# 3) Heatmap
+
+Heatmap depicting batch corrected centered and scaled counts per million (cpm) of selected genes across the apical-in and apical-out time course. Figure 2 c
+
+## defining genes
+
+```{r}
+#| label: defining genes
+VCT <- c(
+  "EPCAM",
+  "CDH1",
+  "ITGA6",
+  "TP63",
+  "PCNA",
+  "MKI67",
+  "CCNA2",
+  "FRAS1",
+  "ADAMTS19",
+  "TNIK",
+  "WLS",
+  "BMP7",
+  "LGR5",
+  "CDH3"
+)
+
+VCT_fusing <- c(
+  "SLC1A5",
+  "OVOL1",
+  "GCM1",
+  "MFSD2A",
+  "ENDOU"
+)
+
+SYN <- c(
+  "IGF2BP2",
+  "RELL2",
+  "TCL1B",
+  "ERVW-1",
+  "ERVFRD-1",
+  "ERVV-1",
+  "ERVV-2",
+  "ERV3-1",
+  "SDC1",
+  "EPS8L1",
+  "CYP19A1"
+)
+
+SYN_hormones <- c(
+  "GDF15",
+  "PAPPA2",
+  "KISS1",
+  "CGA",
+  "CGB3",
+  "CSH1, CSHL1",
+  "PSG2",
+  "PSG3",
+  "PSG6"
+)
+
+genes1.1 <- c(VCT, VCT_fusing, SYN, SYN_hormones)
+
+genes1.1 <- c(VCT,VCT_fusing, SYN, SYN_hormones)
+genes1.1
+```
+
+## data to plot
+
+### calculate cpm values
+
+```{r}
+all_counts_selected.bc.cpm <-edgeR::cpm(all_counts_selected.CBSeq_byD, log=FALSE)  
+```
+
+## assemble data in custom order
+
+```{r}
+data2plot1bc <- data.frame()
+
+for (gene in genes1.1) {
+    data2plot1bc <- rbind(data2plot1bc, all_counts_selected.bc.cpm[rownames(all_counts_selected.bc.cpm) == gene,])
+}
+
+
+rownames(data2plot1bc) <- genes1.1
+
+colnames(data2plot1bc) <- colnames(all_counts_selected.bc.cpm)
+
+data2plot1bc.sc <- t(scale(t(data2plot1bc)))
+
+custom_order <- c(
+  grep("X113_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z143_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z107_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z149_5d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z143_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z107_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z149_6d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z143_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z107_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z149_7d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z143_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z107_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z149_8d_MG", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z143_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z107_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z149_1d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z143_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z107_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z149_2d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X113_3d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Y031_3d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("X087_3d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z143_3d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z107_3d_SP", colnames(data2plot1bc.sc), value = TRUE),
+  grep("Z149_3d_SP", colnames(data2plot1bc.sc), value = TRUE)
+)
+
+data2plot1bc.sc <- data2plot1bc.sc[, custom_order]
+```
+
+## and plot
+
+```{r}
+#| label: Fig 2 c
+plot <- Heatmap(data2plot1bc.sc, cluster_columns=FALSE, cluster_rows=FALSE, 
+                   heatmap_legend_param = list(title = "cpm (c/s)", color_bar = "continuous"),
+                   column_title = "TO identity",
+                   bottom_annotation = NULL)
+
+# display (and save) the plot
+plot
+
+tiff(paste0(plot_dir, "/Figure_2_C.tiff"), width = 9, height = 7, units = "in", res = 300)
+    print(plot)
+dev.off()
+```
+
+## 4) Deconvolution
+
+Deconvolution of the bulk RNA sequencing using:
+
+- single cell data: "Wang 2024 data" ("early" data set, only eCTB, eCTB_fusion and eSTB
+
+```{r}
+sc_data_file <- "sc_data/placenta.rna.8w_rna.20260730.as_sce.with_add_paper_clusters.20260730.eCTB_eSTB_only.rds"
+#The dataset can be regenerated using:
+# preparing_Wang2024_data.qmd
+```
+
+```{r}
+#| label: directories
+date()
+today<- format(Sys.Date(), format="%Y%m%d")
+
+directory <- paste("deconvolution.BayesPrism.Wang2024",today, sep = "")
+if (!file.exists(directory)) {
+  dir.create(file.path(getwd(), directory))
+}
+```
+
+## getting the data
+
+### select apical-in (day 8 matrigel) and apical-out (day 3 supsension) end points
+
+```{r}
+#| label: selection
+
+selected_counts <- all_counts_selected[,c(grep("8d_MG",colnames(all_counts_selected)),grep("3d_SP",colnames(all_counts_selected)))]
+colnames(selected_counts)
+```
+
+### transpose bulk data
+
+from the vignete: bk.dat : The sample-by-gene raw count matrix of bulk RNA-seq expression. rownames are bulk sample IDs, while colnames are gene names/IDs.
+
+```{r}
+#| label: transpose bulk data
+bk.dat <- t(selected_counts)
+bk.dat[,1:5]
+```
+
+![](images/clipboard-9133593.png)
+
+## get sc/snRNA-seq data
+
+```{r}
+#| label: scdata 
+sce <- readRDS(sc_data_file)
+sce 
+table(sce$paper_clusters) 
+table(sce$paper_clusters_name)
+```
+
+### convert to (dense) matrix (and transpose)
+
+```{r}
+#| label: convert to matrix 
+sc.dat <- t(as.matrix(assay(sce)))  
+dim(sc.dat) 
+head(rownames(sc.dat)) 
+head(colnames(sc.dat))
+```
+
+## compare gene identifiers
+
+```{r}
+#| label: gene identifiers 
+length(colnames(sc.dat)) 
+length(colnames(bk.dat)) 
+sum(colnames(sc.dat) %in% colnames(bk.dat)) 
+sum(colnames(bk.dat) %in% colnames(sc.dat))
+```
+
+```{r}
+colnames(colData(sce))
+```
+
+### generate BP cell.type.labels
+
+```{r}
+#| label: cell type labels
+cell.type.labels <- as.character(colData(sce)[,"paper_clusters_name"])
+table(cell.type.labels)
+```
+
+### generate cell.state.labels
+
+from the vignette: Define multiple cell states for cell types of significant heterogeneity, such as malignant cells, and of interest to deconvolve their transcription. this is currently not the case fo now use: cell.state.labels \<- cell.type.labels see: https://github.com/Danko-Lab/BayesPrism/issues/66
+
+```{r}
+#| label: cell state labels
+cell.state.labels <- as.character(colData(sce)[,"paper_clusters_name"])
+
+table(cbind.data.frame(cell.state.labels, cell.type.labels))
+
+```
+
+## QC of cell type and state labels
+
+```{r}
+#| label: QC
+plot.cor.phi (input=sc.dat, 
+              input.labels=cell.state.labels,
+              title="cell state (aka 'cell_type') correlation",
+              cexRow=0.2, cexCol=0.2,
+              margins=c(2,2)
+)
+
+# this is the same in our case
+plot.cor.phi (input=sc.dat, 
+              input.labels=cell.type.labels,
+              title="cell type (aka 'cell_type') correlation",
+              cexRow=0.5, cexCol=0.5,
+)
+
+```
+
+## Filter outlier genes and select marker genes
+
+### filtering
+
+```{r}
+
+#| label: outliers I
+sc.stat <- plot.scRNA.outlier(input=sc.dat, 
+                              cell.type.labels=cell.type.labels,
+                              species="hs", 
+                              return.raw=TRUE
+)
+
+head(sc.stat)
+```
+
+```{r}
+
+#| label: outliers II
+bk.stat <- plot.bulk.outlier(bulk.input=bk.dat,
+                             sc.input=sc.dat, 
+                             cell.type.labels=cell.type.labels,
+                             species="hs",
+                             return.raw=TRUE
+)
+
+head(bk.stat)
+```
+
+```{r}
+
+#| label: filter
+sc.dat.filtered <- cleanup.genes (input=sc.dat, 
+                                  input.type="count.matrix",
+                                  species="hs",
+                                  gene.group=c("Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY"), 
+                                  exp.cells=5)
+
+dim(sc.dat.filtered)
+```
+
+## marker genes
+
+```{r}
+
+#| label: select marker genes 
+# performing pair-wise t test for cell states from different cell types
+diff.exp.stat <- get.exp.stat(sc.dat=sc.dat[,colSums(sc.dat>0)>3],
+                              cell.type.labels=cell.type.labels,
+                              cell.state.labels=cell.state.labels,
+                              pseudo.count=0.1, 
+                              cell.count.cutoff=50, 
+                              n.cores=1 
+)
+
+sc.dat.filtered.sig <- select.marker (sc.dat=sc.dat.filtered, 
+                                      stat=diff.exp.stat,
+                                      pval.max=0.01,
+                                      lfc.min=0.1)
+
+dim(sc.dat.filtered.sig)
+```
+
+## run BayesPrism
+
+### construct prism object
+
+```{r}
+
+#| label: construct prism object
+# use key=NULL
+# see: https://github.com/Danko-Lab/BayesPrism/issues/69
+myPrism <- new.prism( reference=sc.dat.filtered.sig, 
+                      mixture=bk.dat, 
+                      input.type="count.matrix", 
+                      cell.type.labels = cell.type.labels, 
+                      cell.state.labels = cell.state.labels, 
+                      key=NULL,
+                      outlier.cut=0.01,
+                      outlier.fraction=0.1,
+)
+```
+
+### Run BayesPrism
+
+```{r}
+
+#| label: Run BayesPrism
+bp.res <- run.prism(prism = myPrism, n.cores=24)
+bp.res
+file_name <- paste(directory,"/bp.res.",today,".rds",sep = "")
+saveRDS(bp.res, file = file_name)
+```
+
+## extract results
+
+```{r}
+
+#| label: Extract results
+theta <- get.fraction (bp=bp.res,
+                       #bp=bp.res.restored, 
+                       which.theta="final",
+                       state.or.type="type")
+head(theta)
+file_name <- paste(directory,"/BayesPrism_any.",today,".theta.tab",sep = "")
+write.table(cbind(rownames(theta),theta), file = file_name,quote = FALSE,row.names = FALSE, sep = "\t")
+```
+
+## bar plot
+
+Figure 2 j
+
+```{r}
+#| label: bar plot - new color scheme - cts fig 2 j
+
+# Generate plotting data frame from theta
+foo <- character()
+number_of_celltypes <- length(colnames(theta))
+
+for (i in colnames(theta)) {
+  foo <- c(foo, rep(i, length(rownames(theta))))
+}
+
+df2plot <- data.frame(
+  samples   = rep(rownames(theta), number_of_celltypes),
+  prop      = as.vector(theta),
+  cell_type = foo
+)
+
+# Match sample ordering used previously ("ordered by donor")
+df2plot$samples <- factor(
+  df2plot$samples,
+  levels = rownames(theta)[c(1,7,2,8,3,9,4,10,5,11,6,12)]
+)
+
+# Colours and ordering
+cell_cols <- c(
+  # STB lineage
+  "eSTB nascent"        = "#FDE0DD",
+  "eSTB premature 2"    = "#FCC5C0",
+  "eSTB premature 1"    = "#FA9FB5",
+  "eSTB mixed"          = "#F768A1",
+  "eSTB mature 2"       = "#C51B8A",
+  "eSTB mature 1"       = "#7A0177",
+  
+  # Fusion
+  "eCTB fusion"         = "#41AE76",
+  
+  # CTB lineage
+  "eCTB proliferation"  = "#BDD7E7",
+  "eCTB 2"              = "#6BAED6",
+  "eCTB 1"              = "#2171B5"
+)
+
+celltype_order <- c(
+  "eSTB mature 1",
+  "eSTB mature 2",
+  "eSTB mixed",
+  "eSTB premature 1",
+  "eSTB premature 2",
+  "eSTB nascent",
+  "eCTB fusion",
+  "eCTB 1",
+  "eCTB 2",
+  "eCTB proliferation"
+)
+
+df2plot$celltype <- factor(df2plot$cell_type, levels = celltype_order)
+
+df2plot$donor <- factor(
+  unlist(strsplit(as.character(df2plot$samples), "_"))[c(TRUE, FALSE, FALSE)],
+  levels = c("X113", "Y031", "X087", "Z143", "Z107", "Z149")
+)
+
+df2plot$time.med <- factor(
+  unlist(strsplit(as.character(df2plot$samples), "_"))[c(FALSE, TRUE, FALSE)],
+  levels = c("8d", "3d")
+)
+
+# Donor-faceted bar plot
+p.bar <- ggplot(df2plot, aes(x = time.med, y = prop, fill = celltype)) +
+  geom_col() +
+  facet_wrap(~ donor, nrow = 1) +
+  scale_fill_manual(values = cell_cols) +
+  theme_bw()
+
+p.bar
+
+tiff_name <- paste(
+  plot_dir,
+  "/Figure_2_J.tiff",
+  sep = ""
+)
+
+tiff(
+  filename = tiff_name,
+  width = 10,
+  height = 7,
+  units = "in",
+  res = 300,
+  compression = "lzw"
+)
+
+print(p.bar)
+
+dev.off()
+```
+
+## 5) sessionInfo
+
+```{r}
+#| label: sessionInfo
+sessionInfo()
+```
