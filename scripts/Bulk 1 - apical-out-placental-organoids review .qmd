@@ -537,12 +537,11 @@ dev.off()
 
 Deconvolution of the bulk RNA sequencing using:
 
-- single cell data: "Wang 2024 data" ("early" data set, only eCTB, eCTB_fusion and eSTB
+- single cell data: "Wang 2024 data" ("early" data set, only eCTB, eCTB_fusion and eSTB)
 
 ```{r}
 sc_data_file <- "sc_data/placenta.rna.8w_rna.20260730.as_sce.with_add_paper_clusters.20260730.eCTB_eSTB_only.rds"
-#The dataset can be regenerated using:
-# preparing_Wang2024_data.qmd
+# This dataset is available on zenodo: 10.5281/zenodo.23387786
 ```
 
 ```{r}
@@ -550,7 +549,7 @@ sc_data_file <- "sc_data/placenta.rna.8w_rna.20260730.as_sce.with_add_paper_clus
 date()
 today<- format(Sys.Date(), format="%Y%m%d")
 
-directory <- paste("deconvolution.BayesPrism.Wang2024",today, sep = "")
+directory <- paste("deconvolution.BayesPrism.Wang2024.",today, sep = "")
 if (!file.exists(directory)) {
   dir.create(file.path(getwd(), directory))
 }
