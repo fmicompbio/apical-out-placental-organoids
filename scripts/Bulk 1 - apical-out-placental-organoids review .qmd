@@ -549,7 +549,7 @@ sc_data_file <- "sc_data/placenta.rna.8w_rna.20260730.as_sce.with_add_paper_clus
 date()
 today<- format(Sys.Date(), format="%Y%m%d")
 
-directory <- paste("deconvolution.BayesPrism.Wang2024",today, sep = "")
+directory <- paste("deconvolution.BayesPrism.Wang2024.",today, sep = "")
 if (!file.exists(directory)) {
   dir.create(file.path(getwd(), directory))
 }
